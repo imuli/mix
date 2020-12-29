@@ -1,0 +1,26 @@
+name: mix
+version: 0.1.0.0
+synopsis: Minimal Incremental Nix Build System (for Haskell)
+maintainer: Imuli <i@imu.li>
+github: imuli/mix
+license: PublicDomain
+license-file: UNLICENSE
+
+ghc-options: -Wall
+
+dependencies:
+  - base
+  - haskell-src-exts
+  - hashable
+  - directory
+  - containers
+
+library:
+  source-dirs: src
+
+executables:
+  mix:
+    source-dirs: mix
+    main: Main.hs
+    dependencies:
+      - mix
