@@ -1,4 +1,5 @@
 { nixpkgs ? import <nixpkgs> {}
+, binutils ? nixpkgs.binutils-unwrapped
 , coreutils ? nixpkgs.coreutils
 , findutils ? nixpkgs.findutils
 , hpkgs ? nixpkgs.haskellPackages
@@ -49,12 +50,13 @@ let sources = mixnix.sources;
       in builtins.derivation {
         inherit name;
         system = stdenv.system;
-        PATH = lib.makeBinPath [coreutils findutils ghc];
+        PATH = lib.makeBinPath [binutils coreutils findutils ghc];
         builder = writeScript (name + "-builder") ''
           #!${stdenv.shell}
           set -e
           mkdir -p $out/bin tmp
           find ${depPaths} -name '*.o' -exec ghc -tmpdir tmp -o $out/bin/${name} ${ghcArgs} '{}' '+' 2>&1
+          strip $out/bin/${name}
           ${postBuild}
         '';
       }
