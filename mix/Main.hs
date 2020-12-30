@@ -1,11 +1,18 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 module Main where
 
+import           Control.Applicative
 import           Control.Monad
 import           Data.Bits ((.&.), (.|.))
-import           Data.Foldable (find)
+import           Data.Foldable
 import           Data.Hashable
+import           Data.List (intercalate)
+import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import           Data.Maybe (isJust, isNothing)
+import           Data.Maybe (fromMaybe, isNothing)
+import           Data.Set (Set)
+import qualified Data.Set as S
 import           Mix.Modules
 import           Mix.Util
 import           Numeric (showHex)
@@ -33,20 +40,21 @@ usage = do
 run :: Config -> [String] -> IO ()
 run _   []                   = pure ()
 run cnf ("inc" : paths : xs) = run (cnf { confBaseDirs = confBaseDirs cnf <> split ':' paths }) xs
-run cnf ("dot" : xs)         = putDot cnf xs =<< foldM (doModule cnf) mempty xs
+run cnf ("dot" : xs)         = let xs' = S.fromList xs in putDot cnf xs' =<< foldM (doModule cnf) mempty xs'
+run cnf ("nix" : xs)         = let xs' = S.fromList xs in putNix cnf xs' =<< foldM (doModule cnf) mempty xs'
 run _ _                      = usage
 
-doModule :: Config -> M.Map FilePath [FilePath] -> FilePath -> IO (M.Map FilePath [FilePath])
+doModule :: Config -> M.Map FilePath (Set FilePath) -> FilePath -> IO (M.Map FilePath (Set FilePath))
 doModule cnf done hs = do
   mods <- getModules hs
   let modPaths = concatMap (modulePaths $ confBaseDirs cnf) mods
-  presentModules <- filterM doesFileExist modPaths
+  presentModules <- S.fromList <$> filterM doesFileExist modPaths
   let done' = M.insert hs presentModules done
-      nextModules = filter (isNothing . flip M.lookup done') presentModules
+      nextModules = S.filter (isNothing . flip M.lookup done') presentModules
   foldM (doModule cnf) done' nextModules
 
-putDot :: Config -> [FilePath] -> M.Map FilePath [FilePath] -> IO ()
-putDot cnf toplevel deps = do
+putDot :: Config -> (Set FilePath) -> M.Map FilePath (Set FilePath) -> IO ()
+putDot _ toplevel deps = do
   putStrLn    "digraph mix {"
   mapM_ (\(x,ys) -> do
     putStrLn $ show x <> nodeAttrs toplevel x ys <> ";"
@@ -54,13 +62,35 @@ putDot cnf toplevel deps = do
     ) (M.toList deps)
   putStrLn    "}"
 
+putNix :: Config -> (Set FilePath) -> M.Map FilePath (Set FilePath) -> IO ()
+putNix _ _ depGraph = do
+  let (depTrans, _) = foldl' (transitiveClosure depGraph . fst) (mempty, mempty) (M.keys depGraph)
+  putStrLn "{"
+  mapM_ (\(x, ys) -> putStrLn $ "  " <> show x <> " = { transDeps = [" <> intercalate " " (show <$> toList ys) <> "]; };") (M.toList depTrans)
+  putStrLn "}"
+
+transitiveClosure :: forall a. Ord a
+                  => Map a (Set a) -- ^ input graph
+                  -> Map a (Set a) -- ^ current state of search
+                  -> a             -- ^ current item
+                  -> (Map a (Set a), Set a) -- ^ transative closure for 'x' and new state of search
+transitiveClosure graph done x = fromMaybe (M.insert x S.empty done, S.empty) $ present <|> notPresent
+  where
+    present = (done,) <$> M.lookup x done
+    notPresent = withDeps <$> M.lookup x graph
+    withDeps :: Set a -> (Map a (Set a), Set a)
+    withDeps deps = let (done', ys) = foldl' updateFromChild (done, deps) deps
+                     in (M.insert x ys done', ys)
+    updateFromChild :: (Map a (Set a), Set a) -> a -> (Map a (Set a), Set a)
+    updateFromChild (cur, deps) = fmap (deps <>) . transitiveClosure graph cur
+
 mkColor :: Hashable a => a -> String
 mkColor = ('#':) . flip showHex "" . (0x808080 .|.) . (0xffffff .&.) . hash
 
-nodeAttrs :: [FilePath] -> FilePath -> [FilePath] -> String;
-nodeAttrs _   x [] = "[color=" <> show (mkColor x) <> "]"
-nodeAttrs top x _  | isJust $ find (== x) top = "[color=yellow]"
-                   | otherwise = ""
+nodeAttrs :: (Set FilePath) -> FilePath -> (Set FilePath) -> String;
+nodeAttrs top x deps | null deps = "[color=" <> show (mkColor x) <> "]"
+                     | S.member x top = "[color=yellow]"
+                     | otherwise = ""
 
 main :: IO ()
 main = do
